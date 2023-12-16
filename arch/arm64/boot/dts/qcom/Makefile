@@ -706,6 +706,14 @@ dtb-$(CONFIG_SANDERS_DTB) += \
 dtb-$(CONFIG_JETER_DTB) += \
         msm8937-jeter-p0.dtb
 
+dtb-$(CONFIG_ALI_DTB) += \
+	sdm450-ali-evt1.dtb \
+	sdm450-ali-dvt1a.dtb \
+	sdm450-ali-dvt1b.dtb \
+	sdm450-ali-dvt2.dtb \
+	sdm450-ali-pvt1.dtb \
+	sdm450-ali-pvt2.dtb
+
 endif
 
 dtb-$(CONFIG_ARCH_SDM845_VM) += sdm845-vm.dtb
