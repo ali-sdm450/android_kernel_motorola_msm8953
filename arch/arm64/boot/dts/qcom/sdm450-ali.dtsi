@@ -878,7 +878,7 @@
 	};
 };
 
-&pmi8950_charger {
+&qpnp_smbcharger {
 	/delete-property/ pinctrl-names;
 	/delete-property/ pinctrl-0;
 	/delete-property/ gpios;
@@ -914,7 +914,7 @@
 	};
 };
 
-&pmi8950_fg {
+&qpnp_fg {
 	/delete-property/ qcom,battery-data;
 	qcom,thermal-coefficients =  /bits/ 16 <0xB785 0xB249 0x7135>;
 	qcom,irq-volt-empty-mv = <3000>;
