@@ -715,6 +715,8 @@
 			pinctrl-0 = <&sec_tlmm_lines_act>;
 			pinctrl-1 = <&sec_tlmm_lines_sus>;
 		};
+		/delete-node/ qcom,msm-dai-q6-mi2s-senary;
+
 		dai_mi2s5: qcom,msm-dai-q6-mi2s-quin {
 			qcom,msm-mi2s-rx-lines = <2>;
 			pinctrl-names = "default", "idle";

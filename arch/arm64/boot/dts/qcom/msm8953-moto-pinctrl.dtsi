@@ -270,34 +270,7 @@
 				bias-pull-down; /* PULL Down */
 			};
 		};
-
-		spi6_cs0_active: cs0_active {
-			mux {
-				pins = "gpio22";
-				function = "blsp_spi6";
-			};
-
-			config {
-				pins = "gpio22";
-				drive-strength = <2>;
-				bias-disable = <0>;
-			};
-		};
-
-		spi6_cs0_sleep: cs0_sleep {
-			mux {
-				pins = "gpio22";
-				function = "blsp_spi6";
-			};
-
-			config {
-				pins = "gpio22";
-				drive-strength = <2>;
-				bias-disable = <0>;
-			};
-		};
 	};
-
 	spi_1 {
 		spi_1_active: spi_1_active {
 			mux {
