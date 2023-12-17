@@ -651,6 +651,7 @@
 		qcom,otg-fault-gpio = <&tlmm 34  0x1>; /* GPIOF_IN*/
 		psy,type-c;
 		qcom,ssusb-compliance;
+		extcon = <&qpnp_smbcharger>;
 		dwc3@7000000 {
 			controller-number = /bits/ 8 <1>;
 		};
@@ -1149,6 +1150,8 @@
 	qcom,chg-inhibit-fg;
 	qcom,rparasitic-uohm = <100000>;
 	qcom,bms-psy-name = "bms";
+	qcom,external-typec;
+	qcom,typec-psy-name = "typec";
 	qcom,eb-batt-psy-name = "gb_battery";
 	qcom,eb-pwr-psy-name = "gb_ptp";
 	qcom,charge-unknown-battery;
