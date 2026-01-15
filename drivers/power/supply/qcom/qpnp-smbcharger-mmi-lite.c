@@ -472,18 +472,12 @@ static int smbchg_force_apsd(struct smbchg_chip *chip);
 
 #define pr_smb(reason, fmt, ...)				\
 	do {							\
-		if (smbchg_debug_mask & (reason))		\
-			pr_info(fmt, ##__VA_ARGS__);		\
-		else						\
-			pr_debug(fmt, ##__VA_ARGS__);		\
+		pr_info(fmt, ##__VA_ARGS__);		\
 	} while (0)
 
 #define pr_smb_rt(reason, fmt, ...)					\
 	do {								\
-		if (smbchg_debug_mask & (reason))			\
-			pr_info_ratelimited(fmt, ##__VA_ARGS__);	\
-		else							\
-			pr_debug(fmt, ##__VA_ARGS__);	\
+		pr_info_ratelimited(fmt, ##__VA_ARGS__);	\
 	} while (0)
 
 static int smbchg_read(struct smbchg_chip *chip, u8 *val,
