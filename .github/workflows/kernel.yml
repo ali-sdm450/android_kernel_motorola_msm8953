@@ -1,0 +1,84 @@
+name: kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 4.9.337
+  pull_request:
+    branches:
+      - 4.9.337
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARCH: arm64
+  SUBARCH: arm64
+  DEFCONFIG: ali_defconfig
+  OUT_DIR: out
+  CLANG_REV: b3ead31ef9949f53c2570496f5cbecdf0fa40cb1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: checkout kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            bc bison build-essential cpio flex gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi git libelf-dev libssl-dev \
+            python-is-python3 rsync
+
+      - name: fetch clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang_dir="${RUNNER_TEMP}/clang"
+          git init "${clang_dir}"
+          git -C "${clang_dir}" remote add origin \
+            https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone.git
+          git -C "${clang_dir}" fetch --depth=1 origin "${CLANG_REV}"
+          git -C "${clang_dir}" checkout --detach FETCH_HEAD
+          test "$(git -C "${clang_dir}" rev-parse HEAD)" = "${CLANG_REV}"
+
+      - name: build kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="${RUNNER_TEMP}/clang/bin:${PATH}"
+
+          make O="${OUT_DIR}" ARCH="${ARCH}" "${DEFCONFIG}"
+          make -j"$(nproc --all)" O="${OUT_DIR}" ARCH="${ARCH}" \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ LD=ld.lld \
+            AS=llvm-as AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee build.log
+
+          test -s "${OUT_DIR}/arch/arm64/boot/Image.gz-dtb"
+
+      - name: upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ali-kernel-${{ github.sha }}
+          if-no-files-found: warn
+          path: |
+            build.log
+            out/.config
+            out/arch/arm64/boot/Image.gz-dtb
+            out/arch/arm64/boot/dts/qcom/sdm450-ali-*.dtb
