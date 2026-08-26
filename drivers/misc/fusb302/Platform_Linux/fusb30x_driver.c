@@ -54,13 +54,12 @@ enum power_supply_property fusb_power_supply_props[] = {
 	POWER_SUPPLY_PROP_AUTHENTIC,
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_TYPE,
-	POWER_SUPPLY_PROP_DISABLE_USB,
-	POWER_SUPPLY_PROP_WAKEUP,
-	POWER_SUPPLY_PROP_MASK_INT,
+	POWER_SUPPLY_PROP_TYPEC_MODE,
+	POWER_SUPPLY_PROP_TYPEC_CC_ORIENTATION,
+	POWER_SUPPLY_PROP_TYPEC_POWER_ROLE,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
-	POWER_SUPPLY_PROP_SWITCH_STATE,
 };
 
 static enum dual_role_property fusb_drp_properties[] = {
@@ -160,6 +159,7 @@ static int fusb30x_probe(struct i2c_client *client,
 	struct i2c_adapter *adapter;
 	struct dual_role_phy_desc *desc;
 	struct dual_role_phy_instance *dual_role;
+	struct power_supply_config psy_cfg = {};
 	USBTypeCPort PortType;
 
 	if (!client) {
@@ -234,16 +234,22 @@ static int fusb30x_probe(struct i2c_client *client,
 		return -EIO;
 	}
 	FUSB_LOG("FUSB  %s - Device check passed!\n", __func__);
-	usbc_psy.name	= "usbc";
-	usbc_psy.type		= POWER_SUPPLY_TYPE_USBC;
-	usbc_psy.get_property	= fusb_power_supply_get_property;
-	usbc_psy.set_property	= fusb_power_supply_set_property;
-	usbc_psy.properties	= fusb_power_supply_props;
-	usbc_psy.num_properties	= ARRAY_SIZE(fusb_power_supply_props);
-	usbc_psy.property_is_writeable = fusb_power_supply_is_writeable;
-	ret = power_supply_register(&client->dev, &usbc_psy);
-	if (ret) {
-		dev_err(&client->dev, "failed: power supply register\n");
+	usbc_psy_desc.name = "usbc";
+	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
+	usbc_psy_desc.get_property = fusb_power_supply_get_property;
+	usbc_psy_desc.set_property = fusb_power_supply_set_property;
+	usbc_psy_desc.properties = fusb_power_supply_props;
+	usbc_psy_desc.num_properties = ARRAY_SIZE(fusb_power_supply_props);
+	usbc_psy_desc.property_is_writeable = fusb_power_supply_is_writeable;
+	psy_cfg.of_node = client->dev.of_node;
+	psy_cfg.drv_data = chip;
+	usbc_psy = power_supply_register(&client->dev, &usbc_psy_desc,
+					 &psy_cfg);
+	if (IS_ERR(usbc_psy)) {
+		ret = PTR_ERR(usbc_psy);
+		usbc_psy = NULL;
+		dev_err(&client->dev,
+			"failed to register usbc power supply: %d\n", ret);
 		return ret;
 	}
 
@@ -340,7 +346,8 @@ static int fusb30x_probe(struct i2c_client *client,
 		 "FUSB  %s - FUSB30X Driver loaded successfully!\n", __func__);
 	return ret;
 unregister_usbcpsy:
-	power_supply_unregister(&usbc_psy);
+	power_supply_unregister(usbc_psy);
+	usbc_psy = NULL;
 	return ret;
 }
 
@@ -361,7 +368,8 @@ static int fusb30x_remove(struct i2c_client *client)
 	fusb_StopTimers();
 	fusb_GPIO_Cleanup();
 	fusb302_debug_remove();
-	power_supply_unregister(&usbc_psy);
+	power_supply_unregister(usbc_psy);
+	usbc_psy = NULL;
 	if (IS_ENABLED(CONFIG_DUAL_ROLE_USB_INTF)) {
 		devm_dual_role_instance_unregister(
 			&client->dev, chip->dual_role);
