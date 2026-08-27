@@ -286,52 +286,14 @@ void platform_set_data_role(FSC_BOOL PolicyIsDFP)
 }
 FSC_S32 platform_set_usb_device_enable(FSC_BOOL blnEnable)
 {
-	struct power_supply *usb_psy = power_supply_get_by_name("usb");
-	static FSC_BOOL owner_requested = FALSE;
-
-	if (!usb_psy) {
-		FUSB_LOG("Failed to get usb psy!\n");
-		return -ENODEV;
-	}
-
 	FUSB_LOG("Enable USB device mode for debug audio board %d", blnEnable);
-	if (blnEnable) {
-		power_supply_set_usb_owner(usb_psy, PSY_USB_OWNER_USBC);
-		if (power_supply_get_usb_owner(usb_psy) == PSY_USB_OWNER_USBC) {
-			power_supply_set_supply_type(usb_psy,
-					POWER_SUPPLY_TYPE_USB);
-			power_supply_set_present(usb_psy, 1);
-			owner_requested = TRUE;
-		} else {
-			power_supply_put(usb_psy);
-			return -EBUSY;
-		}
-	} else {
-		if (owner_requested) {
-			power_supply_set_supply_type(usb_psy,
-				POWER_SUPPLY_TYPE_UNKNOWN);
-			power_supply_set_present(usb_psy, 0);
-			power_supply_set_usb_owner(usb_psy, PSY_USB_OWNER_NONE);
-			owner_requested = FALSE;
-		}
-	}
-	power_supply_put(usb_psy);
+	/* The 4.9 charger handles the data role through TYPEC_MODE. */
 	return 0;
 }
 void platform_set_usb_host_enable(FSC_BOOL blnEnable)
 {
-	struct power_supply *usb_psy = power_supply_get_by_name("usb");
-
 	FUSB_LOG("%s -  %d\n", __func__, blnEnable);
-	if (usb_psy) {
-		/* Take ownership of the USB lines first */
-		power_supply_set_usb_owner(usb_psy,
-			(blnEnable == TRUE ? PSY_USB_OWNER_USBC :
-						PSY_USB_OWNER_NONE));
-		power_supply_set_usb_otg(usb_psy,
-			(blnEnable == TRUE ? POWER_SUPPLY_USB_OTG_ENABLE :
-					POWER_SUPPLY_USB_OTG_DISABLE));
-	}
+	/* The 4.9 charger handles host mode and VBUS through TYPEC_MODE. */
 }
 FSC_BOOL platform_has_big_switch(void)
 {

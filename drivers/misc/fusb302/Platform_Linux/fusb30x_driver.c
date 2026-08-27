@@ -53,6 +53,7 @@ enum power_supply_property fusb_power_supply_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_AUTHENTIC,
 	POWER_SUPPLY_PROP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_CURRENT_CAPABILITY,
 	POWER_SUPPLY_PROP_TYPE,
 	POWER_SUPPLY_PROP_TYPEC_MODE,
 	POWER_SUPPLY_PROP_TYPEC_CC_ORIENTATION,
@@ -234,8 +235,8 @@ static int fusb30x_probe(struct i2c_client *client,
 		return -EIO;
 	}
 	FUSB_LOG("FUSB  %s - Device check passed!\n", __func__);
-	usbc_psy_desc.name = "usbc";
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
+	usbc_psy_desc.name = "typec";
+	usbc_psy_desc.type = POWER_SUPPLY_TYPE_UNKNOWN;
 	usbc_psy_desc.get_property = fusb_power_supply_get_property;
 	usbc_psy_desc.set_property = fusb_power_supply_set_property;
 	usbc_psy_desc.properties = fusb_power_supply_props;

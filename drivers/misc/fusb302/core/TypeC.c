@@ -240,6 +240,52 @@ static int fusb_get_typec_power_role(void)
 	return POWER_SUPPLY_TYPEC_PR_NONE;
 }
 
+static int fusb_get_typec_current_ma(void)
+{
+	if (ConnState != AttachedSink)
+		return 0;
+	if (PolicyHasContract)
+		return gChargerMaxCurrent * 10;
+	if (SinkCurrent == utcc3p0A)
+		return 3000;
+	if (SinkCurrent == utcc1p5A)
+		return 1500;
+	return 500;
+}
+
+static void fusb_notify_charger(void)
+{
+	struct power_supply *batt_psy;
+	union power_supply_propval val = {0, };
+	int rc;
+
+	batt_psy = power_supply_get_by_name("battery");
+	if (!batt_psy || !batt_psy->desc->set_property)
+		return;
+
+	val.intval = fusb_get_typec_current_ma();
+	rc = batt_psy->desc->set_property(batt_psy,
+			POWER_SUPPLY_PROP_CURRENT_CAPABILITY, &val);
+	if (rc)
+		FUSB_LOG("Failed to set Type-C current: %d\n", rc);
+
+	val.intval = usbc_psy_desc.type;
+	rc = batt_psy->desc->set_property(batt_psy,
+			POWER_SUPPLY_PROP_TYPEC_MODE, &val);
+	if (rc)
+		FUSB_LOG("Failed to set Type-C mode: %d\n", rc);
+
+	power_supply_put(batt_psy);
+}
+
+static void fusb_set_typec_state(enum power_supply_type type)
+{
+	usbc_psy_desc.type = type;
+	if (usbc_psy)
+		power_supply_changed(usbc_psy);
+	fusb_notify_charger();
+}
+
 int fusb_power_supply_get_property(struct power_supply *psy,
 			    enum power_supply_property psp,
 			    union power_supply_propval *val)
@@ -273,6 +319,9 @@ int fusb_power_supply_get_property(struct power_supply *psy,
 			val->intval = 500000;
 		if (PolicyHasContract)
 			val->intval = gChargerMaxCurrent * 10000;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_CAPABILITY:
+		val->intval = fusb_get_typec_current_ma();
 		break;
 	case POWER_SUPPLY_PROP_AUTHENTIC:
 		val->intval = gChargerAuthenticated;
@@ -887,6 +936,7 @@ void StateMachineAttachedSink(void)
 	if (SinkCurrentOld != SinkCurrent) {
 		FUSB_LOG("Type C Rp changed!Google dual port charger ?\n");
 		power_supply_changed(usbc_psy);
+		fusb_notify_charger();
 	}
 }
 #endif // FSC_HAVE_SNK
@@ -1469,8 +1519,7 @@ struct fusb30x_chip *chip = fusb30x_GetChip();
 	DeviceWrite(regControl0, 3, &Registers.Control.byte[0]);
 
 	StateTimer = T_TIMER_DISABLE;	// Disable the state timer, not used in this state
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 	platform_toggleAudioSwitch(fsa_lpm);
 	gChargerAuthenticated = FALSE;
 	gRequestOpVoltage = 100; /*Reset to default 100*50mv*/
@@ -1496,8 +1545,7 @@ void SetStateAttachWaitSink(void)
 	blnCCPinIsCC1 = FALSE;	// Clear orientation to handle Rd-Rd case
 	blnCCPinIsCC2 = FALSE;
 	StateTimer = T_TIMER_DISABLE;
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 
 }
 
@@ -1533,8 +1581,7 @@ void SetStateAttachWaitSource(void)
 	setStateSource(FALSE);
 
 	StateTimer = T_TIMER_DISABLE;	// Disable the state timer, not used in this state
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 }
 #endif // FSC_HAVE_SRC
 
@@ -1562,8 +1609,7 @@ void SetStateAttachWaitAccessory(void)
 	setStateSource(FALSE);
 
 	StateTimer = T_TIMER_DISABLE;	// Disable the state timer, not used in this state
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 }
 #endif // FSC_HAVE_ACCMODE
 
@@ -1587,8 +1633,7 @@ void SetStateAttachedSource(void)
 	StateTimer = tIllegalCable;	// Start dangling illegal cable timeout
 
 	platform_toggleAudioSwitch(fsa_usb_mode);
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_DFP;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_DFP);
 	if(chip->dual_role)
 		dual_role_instance_changed(chip->dual_role);
 }
@@ -1623,8 +1668,7 @@ void SetStateAttachedSink(void)
 	USBPDEnable(TRUE, FALSE);	// Enable the USB PD state machine (no need to write Device again since we are doing it here)
 	StateTimer = T_TIMER_DISABLE;	// Disable the state timer, not used in this state
 	platform_toggleAudioSwitch(fsa_usb_mode);
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_UFP;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UFP);
 }
 #endif // FSC_HAVE_SNK
 
@@ -1696,8 +1740,7 @@ void RoleSwapToAttachedSource(void)
 	CCDebounceTimer = tCCDebounce;	// Disable the 2nd level debouncing, not needed in this state                                      // Disable the toggle timer, not used in this state
 	PDFilterTimer = T_TIMER_DISABLE;	// Disable PD filter timer
 	platform_toggleAudioSwitch(fsa_usb_mode);
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_DFP;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_DFP);
 	platform_set_usb_host_enable(TRUE);
 	if(chip->dual_role)
 		dual_role_instance_changed(chip->dual_role);
@@ -1727,8 +1770,7 @@ void SetStateTryWaitSink(void)
 	setStateSink();
 
 	StateTimer = T_TIMER_DISABLE;	// Set the state timer to disabled
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 
 }
 #endif // FSC_HAVE_DRP
@@ -1746,8 +1788,7 @@ void SetStateTrySource(void)
 	setStateSource(FALSE);
 
 	StateTimer = tDRPTry;	// Set the state timer to disabled
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 
 }
 #endif // FSC_HAVE_DRP
@@ -1766,8 +1807,7 @@ void SetStateTrySink(void)
 	setStateSink();
 
 	StateTimer = tDRPTry;
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 
 }
 #endif /* (defined(FSC_HAVE_DRP) || (defined(FSC_HAVE_SNK) && defined(FSC_HAVE_ACCMODE))) */
@@ -1786,8 +1826,7 @@ void SetStateTryWaitSource(void)
 	setStateSource(FALSE);
 
 	StateTimer = tDRPTry;	// Disable the state timer, not used in this state
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 }
 #endif // FSC_HAVE_DRP
 
@@ -1805,8 +1844,7 @@ void SetStateDebugAccessorySource(void)
 	setStateSource(FALSE);
 
 	StateTimer = tOrientedDebug;	// Disable the state timer, not used in this state
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 	platform_toggleAudioSwitch(fsa_usb_mode);
 }
 
@@ -1832,11 +1870,10 @@ void SetStateAudioAccessory(void)
 		platform_notify_cc_orientation(blnCCPinIsCC2);
 		if (0 != platform_set_usb_device_enable(TRUE))
 			FUSB_LOG("Failed to enable USB device!\n");
-		usbc_psy_desc.type = POWER_SUPPLY_TYPE_UFP;
+		fusb_set_typec_state(POWER_SUPPLY_TYPE_UFP);
 	} else
-		usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
+		fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 	platform_toggleAudioSwitch(fsa_audio_mode);
-	power_supply_changed(usbc_psy);
 }
 #endif /* FSC_HAVE_ACCMODE */
 
@@ -1863,8 +1900,7 @@ void SetStatePoweredAccessory(void)
 	USBPDEnable(TRUE, TRUE);
 
 	StateTimer = tAMETimeout;
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 }
 
 void SetStateUnsupportedAccessory(void)
@@ -1883,8 +1919,7 @@ void SetStateUnsupportedAccessory(void)
 	USBPDDisable(TRUE);
 
 	StateTimer = T_TIMER_DISABLE;	// Disable the state timer, not used in this state
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 
 	platform_notify_unsupported_accessory();
 }
@@ -1909,8 +1944,7 @@ void SetStateUnattachedSource(void)	// Currently only implemented for transition
 
 	StateTimer = tTOG2;	// Disable the state timer, not used in this state
 
-	usbc_psy_desc.type = POWER_SUPPLY_TYPE_TYPEC;
-	power_supply_changed(usbc_psy);
+	fusb_set_typec_state(POWER_SUPPLY_TYPE_UNKNOWN);
 }
 #endif // FSC_HAVE_SRC
 
