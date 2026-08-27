@@ -1,5 +1,7 @@
 #include <linux/kernel.h>
+#include <linux/moduleparam.h>
 #include <linux/stat.h>		// File permission masks
+#include <linux/string.h>
 #include <linux/types.h>	// Kernel datatypes
 #include <linux/i2c.h>		// I2C access, mutex
 #include <linux/errno.h>	// Linux kernel error definitions
@@ -5069,7 +5071,7 @@ static ssize_t fusb302_enable_vconn(struct device *dev,
 		return -EINVAL;
 	}
 
-	if (!strnicmp(buf, "1", 1))
+	if (!strncasecmp(buf, "1", 1))
 		enable = true;
 
 	if (fusb302_cc == CC1) {
