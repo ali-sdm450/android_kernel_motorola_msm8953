@@ -19,7 +19,6 @@ concurrency:
 env:
   ARCH: arm64
   SUBARCH: arm64
-  DEFCONFIG: ali_defconfig
   OUT_DIR: out
   CLANG_REV: b3ead31ef9949f53c2570496f5cbecdf0fa40cb1
 
@@ -27,6 +26,16 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - defconfig: ali_defconfig
+            image: Image.gz-dtb
+            artifact: ali-kernel
+          - defconfig: ali_recovery_defconfig
+            image: Image.gz-dtb
+            artifact: ali-recovery-kernel
 
     steps:
       - name: checkout kernel
@@ -60,25 +69,25 @@ jobs:
           set -euo pipefail
           export PATH="${RUNNER_TEMP}/clang/bin:${PATH}"
 
-          make O="${OUT_DIR}" ARCH="${ARCH}" "${DEFCONFIG}"
+          make O="${OUT_DIR}" ARCH="${ARCH}" "${{ matrix.defconfig }}"
           make -j"$(nproc --all)" O="${OUT_DIR}" ARCH="${ARCH}" \
             CC=clang HOSTCC=clang HOSTCXX=clang++ LD=ld.lld \
             AS=llvm-as AR=llvm-ar NM=llvm-nm \
             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee build.log
+            LLVM=1 LLVM_IAS=1 "${{ matrix.image }}" 2>&1 | tee build.log
 
-          test -s "${OUT_DIR}/arch/arm64/boot/Image.gz-dtb"
+          test -s "${OUT_DIR}/arch/arm64/boot/${{ matrix.image }}"
 
       - name: upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ali-kernel-${{ github.sha }}
+          name: ${{ matrix.artifact }}-${{ github.sha }}
           if-no-files-found: warn
           path: |
             build.log
             out/.config
-            out/arch/arm64/boot/Image.gz-dtb
+            out/arch/arm64/boot/${{ matrix.image }}
             out/arch/arm64/boot/dts/qcom/sdm450-ali-*.dtb
