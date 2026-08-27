@@ -916,4 +916,12 @@ config SENSORS_FPC_PLATFORM_1020
 	help
 	  Say Y here to include the platform FPC1020 driver used by devices
 	  where the fingerprint sensor is controlled through GPIOs only.
+
+config STMVL53L1
+	tristate "STM VL53L1 ranging sensor"
+	depends on I2C
+	help
+	  Say Y here to include support for the VL53L1 time-of-flight
+	  laser-ranging sensor.
+
 endif
