@@ -904,11 +904,6 @@
 	};
 };
 
-&spi_8 {
-	status = "disabled";
-	/delete-node/ fpc_fpc1020@0;
-};
-
 /{
 	/delete-node/ qcom,battery-data;
 	mot_batterydata: qcom,battery-data {
