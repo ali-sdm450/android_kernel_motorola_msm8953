@@ -905,8 +905,8 @@
 };
 
 &spi_8 {
-	/delete-node/ fpc_fpc1020@0;
 	status = "disabled";
+	/delete-node/ fpc_fpc1020@0;
 };
 
 /{
