@@ -909,4 +909,11 @@ config SENSORS_FPC_1020
 	help
 	  Say Y here if you wish to include support for finger print sensor.
 	  If unsure, say N.
+
+config SENSORS_FPC_PLATFORM_1020
+	tristate "fpc platform fingerprint sensor"
+	default n
+	help
+	  Say Y here to include the platform FPC1020 driver used by devices
+	  where the fingerprint sensor is controlled through GPIOs only.
 endif
