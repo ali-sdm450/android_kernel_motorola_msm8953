@@ -18,6 +18,7 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
@@ -48,6 +49,13 @@ static const struct mfd_cell madera_ldo1_devs[] = {
 	{ .name = "madera-ldo1" },
 };
 
+static const struct mfd_cell madera_pinctrl_dev[] = {
+	{
+		.name = "madera-pinctrl",
+		.of_compatible = "cirrus,madera-pinctrl",
+	},
+};
+
 static const char * const cs47l15_supplies[] = {
 	"MICVDD",
 	"CPVDD1",
@@ -55,7 +63,6 @@ static const char * const cs47l15_supplies[] = {
 };
 
 static const struct mfd_cell cs47l15_devs[] = {
-	{ .name = "madera-pinctrl", },
 	{ .name = "madera-irq" },
 	{ .name = "madera-gpio" },
 	{
@@ -79,7 +86,6 @@ static const char * const cs47l35_supplies[] = {
 };
 
 static const struct mfd_cell cs47l35_devs[] = {
-	{ .name = "madera-pinctrl", },
 	{ .name = "madera-irq", },
 	{ .name = "madera-micsupp" },
 	{ .name = "madera-gpio", },
@@ -107,7 +113,6 @@ static const char * const cs47l85_supplies[] = {
 };
 
 static const struct mfd_cell cs47l85_devs[] = {
-	{ .name = "madera-pinctrl", },
 	{ .name = "madera-irq", },
 	{ .name = "madera-micsupp", },
 	{ .name = "madera-gpio", },
@@ -133,7 +138,6 @@ static const char * const cs47l90_supplies[] = {
 };
 
 static const struct mfd_cell cs47l90_devs[] = {
-	{ .name = "madera-pinctrl", },
 	{ .name = "madera-irq", },
 	{ .name = "madera-micsupp", },
 	{ .name = "madera-gpio", },
@@ -156,7 +160,6 @@ static const char * const cs47l92_supplies[] = {
 };
 
 static const struct mfd_cell cs47l92_devs[] = {
-	{ .name = "madera-pinctrl" },
 	{ .name = "madera-irq", },
 	{ .name = "madera-micsupp", },
 	{ .name = "madera-gpio" },
@@ -198,38 +201,42 @@ const char *madera_name_from_type(enum madera_type type)
 }
 EXPORT_SYMBOL_GPL(madera_name_from_type);
 
-#define MADERA_BOOT_POLL_MAX_INTERVAL_US  5000
-#define MADERA_BOOT_POLL_TIMEOUT_US	 25000
+#define MADERA_BOOT_POLL_INTERVAL_USEC		5000
+#define MADERA_BOOT_POLL_TIMEOUT_USEC		25000
 
 static int madera_wait_for_boot(struct madera *madera)
 {
-	unsigned int val;
-	int ret;
+	ktime_t timeout;
+	unsigned int val = 0;
+	int ret = 0;
 
 	/*
 	 * We can't use an interrupt as we need to runtime resume to do so,
 	 * so we poll the status bit. This won't race with the interrupt
 	 * handler because it will be blocked on runtime resume.
+	 * The chip could NAK a read request while it is booting so ignore
+	 * errors from regmap_read.
 	 */
-	ret = regmap_read_poll_timeout(madera->regmap,
-				       MADERA_IRQ1_RAW_STATUS_1,
-				       val,
-				       (val & MADERA_BOOT_DONE_STS1),
-				       MADERA_BOOT_POLL_MAX_INTERVAL_US,
-				       MADERA_BOOT_POLL_TIMEOUT_US);
+	timeout = ktime_add_us(ktime_get(), MADERA_BOOT_POLL_TIMEOUT_USEC);
+	regmap_read(madera->regmap, MADERA_IRQ1_RAW_STATUS_1, &val);
+	while (!(val & MADERA_BOOT_DONE_STS1) &&
+	       !ktime_after(ktime_get(), timeout)) {
+		usleep_range(MADERA_BOOT_POLL_INTERVAL_USEC / 2,
+			     MADERA_BOOT_POLL_INTERVAL_USEC);
+		regmap_read(madera->regmap, MADERA_IRQ1_RAW_STATUS_1, &val);
+	};
 
-	if (ret)
-		dev_err(madera->dev, "Polling BOOT_DONE_STS failed: %d\n", ret);
+	if (!(val & MADERA_BOOT_DONE_STS1)) {
+		dev_err(madera->dev, "Polling BOOT_DONE_STS timed out\n");
+		ret = -ETIMEDOUT;
+	}
 
 	/*
 	 * BOOT_DONE defaults to unmasked on boot so we must ack it.
-	 * Do this unconditionally to avoid interrupt storms
+	 * Do this even after a timeout to avoid interrupt storms.
 	 */
 	regmap_write(madera->regmap, MADERA_IRQ1_STATUS_1,
 		     MADERA_BOOT_DONE_EINT1);
-
-	if (ret)
-		dev_err(madera->dev, "Polling BOOT_DONE_STS failed: %d\n", ret);
 
 	pm_runtime_mark_last_busy(madera->dev);
 
@@ -262,7 +269,7 @@ static void madera_disable_hard_reset(struct madera *madera)
 {
 	if (madera->reset_gpio) {
 		gpiod_set_value_cansleep(madera->reset_gpio, 1);
-		usleep_range(1000, 2000);
+		usleep_range(2000, 3000);
 	}
 }
 
@@ -274,6 +281,8 @@ static int madera_runtime_resume(struct device *dev)
 
 	dev_dbg(dev, "Leaving sleep mode\n");
 
+	madera_enable_hard_reset(madera);
+
 	ret = regulator_enable(madera->dcvdd);
 	if (ret) {
 		dev_err(dev, "Failed to enable DCVDD: %d\n", ret);
@@ -282,6 +291,22 @@ static int madera_runtime_resume(struct device *dev)
 
 	regcache_cache_only(madera->regmap, false);
 	regcache_cache_only(madera->regmap_32bit, false);
+
+	madera_disable_hard_reset(madera);
+
+	if (!madera->reset_gpio) {
+		usleep_range(2000, 3000);
+
+		ret = madera_wait_for_boot(madera);
+		if (ret)
+			goto err;
+
+		ret = madera_soft_reset(madera);
+		if (ret) {
+			dev_err(dev, "Failed to reset: %d\n", ret);
+			goto err;
+		}
+	}
 
 	ret = madera_wait_for_boot(madera);
 	if (ret)
@@ -492,7 +517,7 @@ static void madera_prop_get_micbias_gen(struct madera *madera,
 
 	desc.name = name;
 	pdata->init_data = of_get_regulator_init_data(madera->dev, np, &desc);
-	pdata->ext_cap = of_property_read_bool(np, "wlf,ext-cap");
+	pdata->ext_cap = of_property_read_bool(np, "cirrus,ext-cap");
 	of_property_read_u32(np, "regulator-active-discharge",
 			     &pdata->active_discharge);
 }
@@ -600,6 +625,30 @@ static void madera_configure_micbias(struct madera *madera)
 	}
 }
 
+static int madera_dev_select_pinctrl(struct madera *madera,
+				     struct pinctrl *pinctrl,
+				     const char *name)
+{
+	struct pinctrl_state *pinctrl_state;
+	int ret;
+
+	pinctrl_state = pinctrl_lookup_state(pinctrl, name);
+
+	/* it's ok if it doesn't exist */
+	if (!IS_ERR(pinctrl_state)) {
+		dev_dbg(madera->dev, "Applying pinctrl %s state\n", name);
+		ret = pinctrl_select_state(pinctrl, pinctrl_state);
+		if (ret) {
+			dev_err(madera->dev,
+				"Failed to select pinctrl %s state: %d\n",
+				name, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 int madera_dev_init(struct madera *madera)
 {
 	struct device *dev = madera->dev;
@@ -607,10 +656,12 @@ int madera_dev_init(struct madera *madera)
 	unsigned int hwid;
 	int (*patch_fn)(struct madera *) = NULL;
 	const struct mfd_cell *mfd_devs;
+	struct pinctrl *pinctrl;
 	int n_devs = 0;
 	int i, ret;
 
 	dev_set_drvdata(madera->dev, madera);
+
 	BLOCKING_INIT_NOTIFIER_HEAD(&madera->notifier);
 
 	if (dev_get_platdata(madera->dev)) {
@@ -632,6 +683,39 @@ int madera_dev_init(struct madera *madera)
 
 	madera->num_core_supplies = ARRAY_SIZE(madera_core_supplies);
 
+	/*
+	 * Pinctrl subsystem only configures pinctrls if all referenced pins
+	 * are registered. Create our pinctrl child now so that its pins exist
+	 * otherwise external pinctrl dependencies will fail
+	 * Note: Can't devm_ because it is cleaned up after children are already
+	 * destroyed
+	 */
+	ret = mfd_add_devices(madera->dev, PLATFORM_DEVID_NONE,
+			      madera_pinctrl_dev, 1, NULL, 0, NULL);
+	if (ret) {
+		dev_err(madera->dev, "Failed to add pinctrl child: %d\n", ret);
+		return ret;
+	}
+
+	pinctrl = pinctrl_get(dev);
+	if (IS_ERR(pinctrl)) {
+		ret = PTR_ERR(pinctrl);
+		dev_err(madera->dev, "Failed to get pinctrl: %d\n", ret);
+		goto err_pinctrl_dev;
+	}
+
+	/* Use (optional) minimal config with only external pin bindings */
+	ret = madera_dev_select_pinctrl(madera, pinctrl, "probe");
+	if (ret)
+		goto err_pinctrl;
+
+	ret = devm_regulator_bulk_get(dev, madera->num_core_supplies,
+				      madera->core_supplies);
+	if (ret) {
+		dev_err(dev, "Failed to request core supplies: %d\n", ret);
+		goto err_pinctrl;
+	}
+
 	switch (madera->type) {
 	case CS47L15:
 	case CS47L35:
@@ -649,19 +733,13 @@ int madera_dev_init(struct madera *madera)
 				      NULL, 0, NULL);
 		if (ret) {
 			dev_err(dev, "Failed to add LDO1 child: %d\n", ret);
-			return ret;
+			goto err_pinctrl;
 		}
 		break;
 	default:
 		dev_err(madera->dev, "Unknown device type %d\n", madera->type);
-		return -ENODEV;
-	}
-
-	ret = devm_regulator_bulk_get(dev, madera->num_core_supplies,
-				      madera->core_supplies);
-	if (ret) {
-		dev_err(dev, "Failed to request core supplies: %d\n", ret);
-		goto err_devs;
+		ret = -ENODEV;
+		goto err_pinctrl;
 	}
 
 	/*
@@ -674,7 +752,7 @@ int madera_dev_init(struct madera *madera)
 	if (IS_ERR(madera->dcvdd)) {
 		ret = PTR_ERR(madera->dcvdd);
 		dev_err(dev, "Failed to request DCVDD: %d\n", ret);
-		goto err_devs;
+		goto err_pinctrl;
 	}
 
 	ret = regulator_bulk_enable(madera->num_core_supplies,
@@ -695,10 +773,19 @@ int madera_dev_init(struct madera *madera)
 	regcache_cache_only(madera->regmap, false);
 	regcache_cache_only(madera->regmap_32bit, false);
 
-	/*
-	 * Verify that this is a chip we know about before we
-	 * starting doing any writes to its registers
-	 */
+	/* If we don't have a reset GPIO use a soft reset */
+	if (!madera->reset_gpio) {
+		ret = madera_soft_reset(madera);
+		if (ret)
+			goto err_reset;
+	}
+
+	ret = madera_wait_for_boot(madera);
+	if (ret) {
+		dev_err(madera->dev, "Device failed initial boot: %d\n", ret);
+		goto err_reset;
+	}
+
 	ret = regmap_read(madera->regmap, MADERA_SOFTWARE_RESET, &hwid);
 	if (ret) {
 		dev_err(dev, "Failed to read ID register: %d\n", ret);
@@ -715,19 +802,6 @@ int madera_dev_init(struct madera *madera)
 	default:
 		dev_err(madera->dev, "Unknown device ID: %x\n", hwid);
 		ret = -EINVAL;
-		goto err_reset;
-	}
-
-	/* If we don't have a reset GPIO use a soft reset */
-	if (!madera->reset_gpio) {
-		ret = madera_soft_reset(madera);
-		if (ret)
-			goto err_reset;
-	}
-
-	ret = madera_wait_for_boot(madera);
-	if (ret) {
-		dev_err(madera->dev, "Device failed initial boot: %d\n", ret);
 		goto err_reset;
 	}
 
@@ -831,6 +905,11 @@ int madera_dev_init(struct madera *madera)
 		}
 	}
 
+	/* Apply (optional) main pinctrl config, this will configure our pins */
+	ret = madera_dev_select_pinctrl(madera, pinctrl, "active");
+	if (ret)
+		goto err_reset;
+
 	/* Init 32k clock sourced from MCLK2 */
 	ret = regmap_update_bits(madera->regmap,
 			MADERA_CLOCK_32K_1,
@@ -856,6 +935,8 @@ int madera_dev_init(struct madera *madera)
 		goto err_pm_runtime;
 	}
 
+	pinctrl_put(pinctrl);
+
 	return 0;
 
 err_pm_runtime:
@@ -868,7 +949,9 @@ err_enable:
 			       madera->core_supplies);
 err_dcvdd:
 	regulator_put(madera->dcvdd);
-err_devs:
+err_pinctrl:
+	pinctrl_put(pinctrl);
+err_pinctrl_dev:
 	mfd_remove_devices(dev);
 
 	return ret;

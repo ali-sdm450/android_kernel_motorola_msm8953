@@ -18,6 +18,8 @@
 
 #include "wm_adsp.h"
 
+#include "madera-slimbus.h"
+
 #define MADERA_FLL1_REFCLK		1
 #define MADERA_FLL2_REFCLK		2
 #define MADERA_FLL3_REFCLK		3
@@ -122,6 +124,9 @@ struct madera_voice_trigger_info {
 struct madera_dai_priv {
 	int clk;
 	struct snd_pcm_hw_constraint_list constraint;
+
+	int sample_rate;
+	int bit_width;
 };
 
 struct madera_priv {
@@ -150,6 +155,20 @@ struct madera_priv {
 	int tdm_slots[MADERA_MAX_AIF];
 
 	int domain_group_ref[MADERA_N_DOM_GRPS];
+
+	u32 rx_port_handle[MADERA_SLIMBUS_MAX_CHANNELS];
+	u32 tx_port_handle[MADERA_SLIMBUS_MAX_CHANNELS];
+	u16 rx_channel_handle[MADERA_SLIMBUS_MAX_CHANNELS];
+	u16 tx_channel_handle[MADERA_SLIMBUS_MAX_CHANNELS];
+	u16 rx_chan_map_slot[3][MADERA_SLIMBUS_MAX_CHANNELS];
+	u16 tx_chan_map_slot[3][MADERA_SLIMBUS_MAX_CHANNELS];
+	int rx_chan_map_num[3];
+	int tx_chan_map_num[3];
+	u32 rx1_samplerate;
+	u32 rx1_sampleszbits;
+	u32 rx2_samplerate;
+	u32 rx2_sampleszbits;
+	u8 slim_logic_addr;
 };
 
 struct madera_fll_cfg {
@@ -180,6 +199,11 @@ struct madera_fll {
 struct madera_enum {
 	struct soc_enum mixer_enum;
 	int val;
+};
+
+struct cs47l35 {
+	struct madera_priv core;
+	struct madera_fll fll;
 };
 
 extern const unsigned int madera_ana_tlv[];
@@ -334,6 +358,7 @@ extern unsigned int madera_mixer_values[MADERA_NUM_MIXER_INPUTS];
 
 extern const struct snd_soc_dai_ops madera_dai_ops;
 extern const struct snd_soc_dai_ops madera_simple_dai_ops;
+extern const struct snd_soc_dai_ops madera_slim_dai_ops;
 
 extern const struct snd_kcontrol_new madera_inmux[];
 
@@ -480,5 +505,7 @@ static inline int madera_unregister_notifier(struct snd_soc_codec *codec,
 
 	return blocking_notifier_chain_unregister(&madera->notifier, nb);
 }
+
+extern const struct snd_soc_dai_ops madera_slim_dai_ops;
 
 #endif

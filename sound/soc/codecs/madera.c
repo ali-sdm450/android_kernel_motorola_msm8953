@@ -2554,6 +2554,7 @@ int madera_in_ev(struct snd_soc_dapm_widget *w, struct snd_kcontrol *kcontrol,
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		priv->in_pending--;
+		msleep(30);
 		snd_soc_update_bits(codec, reg, MADERA_IN1L_MUTE, 0);
 
 		/* If this is the last input pending then allow VU */
@@ -3263,10 +3264,17 @@ static int madera_hw_params_rate(struct snd_pcm_substream *substream,
 	int i, sr_val;
 	unsigned int cur, tar;
 	bool change_rate_domain = false;
+	u32 rx_sampleszbits, rx_samplerate;
+
+	rx_sampleszbits = snd_pcm_format_width(params_format(params));
+	if (rx_sampleszbits < 16)
+		rx_sampleszbits = 16;
 
 	for (i = 0; i < ARRAY_SIZE(madera_sr_vals); i++)
-		if (madera_sr_vals[i] == params_rate(params))
+		if (madera_sr_vals[i] == params_rate(params)) {
+			rx_samplerate = params_rate(params);
 			break;
+		}
 
 	if (i == ARRAY_SIZE(madera_sr_vals)) {
 		madera_aif_err(dai, "Unsupported sample rate %dHz\n",
@@ -3274,6 +3282,20 @@ static int madera_hw_params_rate(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 	sr_val = i;
+
+	switch (dai->id) {
+	case 4: /* cs47l35-slim1 */
+		priv->rx1_sampleszbits = rx_sampleszbits;
+		priv->rx1_samplerate = rx_samplerate;
+		break;
+	case 5: /* cs47l35-slim2 */
+		priv->rx2_sampleszbits = rx_sampleszbits;
+		priv->rx2_samplerate = rx_samplerate;
+		break;
+	case 6:
+	default:
+		break;
+	}
 
 	if (base) {
 		switch (dai_priv->clk) {
@@ -3439,6 +3461,13 @@ static int madera_hw_params(struct snd_pcm_substream *substream,
 
 	bclk_target = slotw * channels * params_rate(params);
 
+	/* Force width to be 16 bit if params pass 8 bit */
+	if (dataw == 8) {
+		dataw *= 2;
+		bclk_target *= 2;
+		tdm_width = dataw;
+	}
+
 	if (chan_limit && chan_limit < channels) {
 		madera_aif_dbg(dai, "Limiting to %d channels\n", chan_limit);
 		bclk_target /= channels;
@@ -3556,15 +3585,16 @@ static int madera_dai_set_sysclk(struct snd_soc_dai *dai,
 		return is_sync;
 	}
 
-	if (is_sync == madera_is_syncclk(dai_priv->clk))
-		return 0;
-
 	if (dai->active) {
 		dev_err(codec->dev, "Can't change clock on active DAI %d\n",
 			dai->id);
 		return -EBUSY;
 	}
 
+	dai_priv->clk = clk_id;
+
+	if (is_sync == madera_is_syncclk(dai_priv->clk))
+		return 0;
 	dev_dbg(codec->dev, "Setting AIF%d to %s\n", dai->id,
 		is_sync ? "SYSCLK" : "ASYNCCLK");
 
@@ -3582,8 +3612,6 @@ static int madera_dai_set_sysclk(struct snd_soc_dai *dai,
 		snd_soc_dapm_del_routes(dapm, routes, ARRAY_SIZE(routes));
 	else
 		snd_soc_dapm_add_routes(dapm, routes, ARRAY_SIZE(routes));
-
-	dai_priv->clk = clk_id;
 
 	return snd_soc_dapm_sync(dapm);
 }
@@ -3674,8 +3702,18 @@ const struct snd_soc_dai_ops madera_simple_dai_ops = {
 	.startup = madera_startup,
 	.hw_params = madera_hw_params_rate,
 	.set_sysclk = madera_dai_set_sysclk,
+	.set_channel_map = madera_set_channel_map,
+	.get_channel_map = madera_get_channel_map,
 };
 EXPORT_SYMBOL_GPL(madera_simple_dai_ops);
+
+const struct snd_soc_dai_ops madera_slim_dai_ops = {
+	.hw_params = madera_hw_params_rate,
+	.set_sysclk = madera_dai_set_sysclk,
+	.set_channel_map = madera_set_channel_map,
+	.get_channel_map = madera_get_channel_map,
+};
+EXPORT_SYMBOL_GPL(madera_slim_dai_ops);
 
 int madera_init_dai(struct madera_priv *priv, int id)
 {
