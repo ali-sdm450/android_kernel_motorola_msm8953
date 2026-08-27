@@ -17,6 +17,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
+#include <linux/delay.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
@@ -32,8 +33,18 @@
 #include "codecs/msm-cdc-pinctrl.h"
 #include "codecs/wcd9335.h"
 #include "codecs/wcd-mbhc-v2.h"
+#ifdef CONFIG_SND_SOC_MADERA
+#include <sound/soc/codecs/madera.h>
+#include <linux/mfd/madera/registers.h>
+#include <sound/soc/codecs/cs35l34.h>
+#else
 #include "codecs/wsa881x.h"
+#endif
 #include "msm8952-slimbus.h"
+
+#ifdef CONFIG_MODS_MODBUS_EXT
+#include <linux/mods/modbus_ext.h>
+#endif
 
 #define DRV_NAME "msm8952-slimbus-wcd"
 
@@ -70,6 +81,19 @@
 
 #define TDM_SLOT_OFFSET_MAX    8
 
+#ifdef CONFIG_SND_SOC_MADERA
+#define FLL_RATE_MADERA 294912000
+#define MADERA_SYSCLK_RATE (FLL_RATE_MADERA / 3)
+#define MADERA_DSPCLK_RATE (FLL_RATE_MADERA / 2)
+#define CS35L34_MCLK_RATE 6144000
+#define CS35L35_MCLK_RATE 12288000
+#define CS35L35_SCLK_RATE 1536000
+static unsigned int msm_slim_rx_ch[CS47L35_SLIM_RX_MAX] = {144, 145, 146, 147,
+						148, 149};
+static unsigned int msm_slim_tx_ch[CS47L35_SLIM_TX_MAX] = {128, 129, 130, 131,
+						132, 133};
+#endif
+
 enum btsco_rates {
 	RATE_8KHZ_ID,
 	RATE_16KHZ_ID,
@@ -83,6 +107,7 @@ enum {
 	TDM_MAX,
 };
 
+static atomic_t mods_mi2s_active;
 static int slim0_rx_sample_rate = SAMPLING_RATE_48KHZ;
 static int slim0_tx_sample_rate = SAMPLING_RATE_48KHZ;
 static int slim1_tx_sample_rate = SAMPLING_RATE_48KHZ;
@@ -156,8 +181,10 @@ static unsigned int tdm_slot_offset[TDM_MAX][TDM_SLOT_OFFSET_MAX] = {
 	{0, 4, 8, 12, 16, 20, 24, 28},
 };
 
+#ifndef CONFIG_SND_SOC_MADERA
 static int msm8952_enable_codec_mclk(struct snd_soc_codec *codec, int enable,
 					bool dapm);
+#endif
 
 static struct wcd_mbhc_config wcd_mbhc_cfg = {
 	.read_fw_bin = false,
@@ -245,6 +272,7 @@ static inline struct snd_mask *param_to_mask(struct snd_pcm_hw_params *p, int n)
 	return &(p->masks[n - SNDRV_PCM_HW_PARAM_FIRST_MASK]);
 }
 
+#ifndef CONFIG_SND_SOC_MADERA
 int msm895x_wsa881x_init(struct snd_soc_component *component)
 {
 	u8 spkleft_ports[WSA881X_MAX_SWR_PORTS] = {100, 101, 102, 106};
@@ -293,6 +321,7 @@ int msm895x_wsa881x_init(struct snd_soc_component *component)
 						      codec);
 	return 0;
 }
+#endif
 
 static void param_set_mask(struct snd_pcm_hw_params *p, int n, unsigned int bit)
 {
@@ -346,7 +375,7 @@ static int msm8952_set_spk(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
-
+#ifndef CONFIG_SND_SOC_MADERA
 static int msm8952_enable_codec_mclk(struct snd_soc_codec *codec, int enable,
 					bool dapm)
 {
@@ -360,6 +389,7 @@ static int msm8952_enable_codec_mclk(struct snd_soc_codec *codec, int enable,
 
 	return 0;
 }
+#endif
 
 static int slim5_rx_sample_rate_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -2154,12 +2184,17 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_dai_link *dai_link = rtd->dai_link;
 
 	int ret = 0;
+#ifndef CONFIG_SND_SOC_MADERA
 	u32 rx_ch[SLIM_MAX_RX_PORTS], tx_ch[SLIM_MAX_TX_PORTS];
 	u32 rx_ch_cnt = 0, tx_ch_cnt = 0;
+#else
+	u32 tx_ch_cnt = 0;
+#endif
 	u32 user_set_tx_ch = 0;
 	u32 rx_ch_count;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+#ifndef CONFIG_SND_SOC_MADERA
 		ret = snd_soc_dai_get_channel_map(codec_dai,
 					&tx_ch_cnt, tx_ch, &rx_ch_cnt, rx_ch);
 		if (ret < 0) {
@@ -2167,6 +2202,7 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 				__func__, ret);
 			goto end;
 		}
+#endif
 		if (dai_link->id == MSM_BACKEND_DAI_SLIMBUS_4_RX) {
 			pr_debug("%s: rx_4_ch=%d\n", __func__,
 				 msm_slim_4_rx_ch);
@@ -2184,8 +2220,20 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 					msm_slim_0_rx_ch);
 			rx_ch_count = msm_slim_0_rx_ch;
 		}
+#ifndef CONFIG_SND_SOC_MADERA
 		ret = snd_soc_dai_set_channel_map(cpu_dai, 0, 0,
 						  rx_ch_count, rx_ch);
+#else
+		ret = snd_soc_dai_set_channel_map(codec_dai, 0, 0,
+						  rx_ch_count, msm_slim_rx_ch);
+		if (ret < 0) {
+			pr_err("%s: failed to set codec chan map, err:%d\n",
+				__func__, ret);
+			goto end;
+		}
+		ret = snd_soc_dai_set_channel_map(cpu_dai, 0, 0,
+						  rx_ch_count, msm_slim_rx_ch);
+#endif
 		if (ret < 0) {
 			pr_err("%s: failed to set cpu chan map, err:%d\n",
 				__func__, ret);
@@ -2194,6 +2242,7 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 	} else {
 		pr_debug("%s: %s_tx_dai_id_%d_ch=%d\n", __func__,
 			 codec_dai->name, codec_dai->id, user_set_tx_ch);
+#ifndef CONFIG_SND_SOC_MADERA
 		ret = snd_soc_dai_get_channel_map(codec_dai,
 					 &tx_ch_cnt, tx_ch, &rx_ch_cnt, rx_ch);
 		if (ret < 0) {
@@ -2201,6 +2250,7 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 				__func__, ret);
 			goto end;
 		}
+#endif
 		/* For <codec>_tx1 case */
 		if (dai_link->id == MSM_BACKEND_DAI_SLIMBUS_0_TX)
 			user_set_tx_ch = msm_slim_0_tx_ch;
@@ -2218,19 +2268,32 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 		else if (dai_link->id == MSM_BACKEND_DAI_SLIMBUS_4_TX)
 			user_set_tx_ch = msm_vi_feed_tx_ch;
 		else
+#ifndef CONFIG_SND_SOC_MADERA
 			user_set_tx_ch = tx_ch_cnt;
+#else
+			user_set_tx_ch = 1;
+#endif
 
-		pr_debug(
-		"%s: msm_slim_0_tx_ch(%d) user_set_tx_ch(%d) tx_ch_cnt(%d)\n",
+		pr_debug("%s: msm_slim_0_tx_ch(%d) user_set_tx_ch(%d) tx_ch_cnt(%d)\n",
 			__func__, msm_slim_0_tx_ch, user_set_tx_ch, tx_ch_cnt);
 
+#ifndef CONFIG_SND_SOC_MADERA
 		ret = snd_soc_dai_set_channel_map(cpu_dai,
 						  user_set_tx_ch, tx_ch, 0, 0);
-		if (ret < 0) {
+#else
+		ret = snd_soc_dai_set_channel_map(codec_dai,
+				user_set_tx_ch,
+				msm_slim_tx_ch, 0, 0);
+		if (ret < 0)
+			pr_err("%s: failed to set codec chan map, err:%d\n",
+				__func__, ret);
+		ret = snd_soc_dai_set_channel_map(cpu_dai,
+						user_set_tx_ch,
+						msm_slim_tx_ch, 0, 0);
+#endif
+		if (ret < 0)
 			pr_err("%s: failed to set cpu chan map, err:%d\n",
 				__func__, ret);
-			goto end;
-		}
 	}
 end:
 	return ret;
@@ -2776,6 +2839,9 @@ static struct notifier_block adsp_state_notifier_block = {
 void msm_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 {
 	int ret = 0;
+#ifdef CONFIG_MODS_MODBUS_EXT
+	struct modbus_ext_status modbus_status;
+#endif
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_card *card = rtd->card;
 	struct msm8952_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
@@ -2783,11 +2849,23 @@ void msm_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	pr_debug("%s(): substream = %s  stream = %d, ext_pa = %d\n", __func__,
 		 substream->name, substream->stream, pdata->ext_pa);
 
+#ifdef CONFIG_MODS_MODBUS_EXT
+	if (!atomic_dec_and_test(&mods_mi2s_active)) {
+		pr_debug("%s: port users not zero don't shut down yet\n",
+				__func__);
+		return;
+	}
+	modbus_status.proto = MODBUS_PROTO_I2S;
+	modbus_status.active = false;
+	modbus_ext_set_state(&modbus_status);
+#endif
+
 	ret = quat_mi2s_clk_ctl(substream, false);
 	if (ret < 0)
 		pr_err("%s:clock disable failed\n", __func__);
 	if (atomic_read(&pdata->clk_ref.quat_mi2s_clk_ref) > 0)
 		atomic_dec(&pdata->clk_ref.quat_mi2s_clk_ref);
+#ifndef CONFIG_SND_SOC_MADERA
 	if (pdata->mi2s_gpio_p[QUAT_MI2S]) {
 		ret =  msm_cdc_pinctrl_select_sleep_state(
 			pdata->mi2s_gpio_p[QUAT_MI2S]);
@@ -2797,6 +2875,7 @@ void msm_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 			return;
 		}
 	}
+#endif
 }
 
 int msm_prim_auxpcm_startup(struct snd_pcm_substream *substream)
@@ -2858,12 +2937,22 @@ int msm_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_card *card = rtd->card;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+#ifdef CONFIG_MODS_MODBUS_EXT
+	struct modbus_ext_status modbus_status;
+#endif
 	struct msm8952_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	int ret = 0, val;
 
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 		 substream->name, substream->stream);
 
+#ifdef CONFIG_MODS_MODBUS_EXT
+	modbus_status.proto = MODBUS_PROTO_I2S;
+	modbus_status.active = true;
+
+	atomic_inc(&mods_mi2s_active);
+	modbus_ext_set_state(&modbus_status);
+#endif
 	/* Configure mux for quaternary i2s */
 	if (pdata->vaddr_gpio_mux_mic_ctl) {
 		val = ioread32(pdata->vaddr_gpio_mux_mic_ctl);
@@ -2876,7 +2965,7 @@ int msm_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 				__func__);
 		return ret;
 	}
-
+#ifndef CONFIG_SND_SOC_MADERA
 	if (pdata->mi2s_gpio_p[QUAT_MI2S]) {
 		ret =  msm_cdc_pinctrl_select_active_state(
 					pdata->mi2s_gpio_p[QUAT_MI2S]);
@@ -2886,7 +2975,7 @@ int msm_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 			goto err;
 		}
 	}
-
+#endif
 	if (atomic_inc_return(&pdata->clk_ref.quat_mi2s_clk_ref) == 1) {
 		ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
 		if (ret < 0)
@@ -2894,11 +2983,13 @@ int msm_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	}
 	return ret;
 
+#ifndef CONFIG_SND_SOC_MADERA
 err:
 	ret = quat_mi2s_clk_ctl(substream, false);
 	if (ret < 0)
 		pr_err("%s:failed to disable sclk\n", __func__);
 	return ret;
+#endif
 }
 
 int msm_quin_mi2s_snd_startup(struct snd_pcm_substream *substream)
@@ -2924,6 +3015,7 @@ int msm_quin_mi2s_snd_startup(struct snd_pcm_substream *substream)
 		pr_err("failed to enable sclk\n");
 		return ret;
 	}
+#ifndef CONFIG_SND_SOC_MADERA
 	if (pdata->mi2s_gpio_p[QUIN_MI2S]) {
 		ret =  msm_cdc_pinctrl_select_active_state(
 				pdata->mi2s_gpio_p[QUIN_MI2S]);
@@ -2932,18 +3024,20 @@ int msm_quin_mi2s_snd_startup(struct snd_pcm_substream *substream)
 					goto err;
 		}
 	}
-
+#endif
 	if (atomic_inc_return(&pdata->clk_ref.quin_mi2s_clk_ref) == 1) {
 		ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
 		if (ret < 0)
 			pr_debug("%s: set fmt cpu dai failed\n", __func__);
 	}
 	return ret;
+#ifndef CONFIG_SND_SOC_MADERA
 err:
 	ret = quin_mi2s_sclk_ctl(substream, false);
 	if (ret < 0)
 		pr_err("failed to disable sclk\n");
 	return ret;
+#endif
 }
 
 void msm_quin_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
@@ -2960,6 +3054,7 @@ void msm_quin_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 		pr_err("%s:clock disable failed\n", __func__);
 	if (atomic_read(&pdata->clk_ref.quin_mi2s_clk_ref) > 0)
 		atomic_dec(&pdata->clk_ref.quin_mi2s_clk_ref);
+#ifndef CONFIG_SND_SOC_MADERA
 	if (pdata->mi2s_gpio_p[QUIN_MI2S]) {
 		ret =  msm_cdc_pinctrl_select_sleep_state(
 				pdata->mi2s_gpio_p[QUIN_MI2S]);
@@ -2969,6 +3064,7 @@ void msm_quin_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 			return;
 		}
 	}
+#endif
 }
 
 int msm_tdm_startup(struct snd_pcm_substream *substream)
@@ -3168,14 +3264,40 @@ static int msm8952_mclk_event(struct snd_soc_dapm_widget *w,
 		struct snd_kcontrol *kcontrol, int event)
 {
 	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
-
+#ifdef CONFIG_SND_SOC_MADERA
+	int ret;
+#endif
 	pr_debug("%s: event = %d\n", __func__, event);
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+#ifdef CONFIG_SND_SOC_MADERA
+		ret = snd_soc_codec_set_pll(codec, MADERA_FLL1_REFCLK,
+			MADERA_FLL_SRC_SLIMCLK,
+			1536000, MADERA_SYSCLK_RATE);
+		if (ret != 0) {
+			dev_err(codec->dev, "Failed to set MCLK2 %d\n",
+				ret);
+			return ret;
+		}
+		break;
+#else
 		return msm8952_enable_codec_mclk(codec, 1, true);
+#endif
 	case SND_SOC_DAPM_POST_PMD:
+#ifdef CONFIG_SND_SOC_MADERA
+		ret = snd_soc_codec_set_pll(codec, MADERA_FLL1_REFCLK,
+			MADERA_FLL_SRC_MCLK2,
+			32768, MADERA_SYSCLK_RATE);
+		if (ret != 0) {
+			dev_err(codec->dev, "Failed to set MCLK2 %d\n",
+				ret);
+			return ret;
+		}
+		break;
+#else
 		return msm8952_enable_codec_mclk(codec, 0, true);
+#endif
 	}
 	return 0;
 }
@@ -3208,12 +3330,59 @@ static const struct snd_soc_dapm_widget msm8952_tasha_dapm_widgets[] = {
 	SND_SOC_DAPM_MIC("Digital Mic6", NULL),
 };
 
+#ifdef CONFIG_SND_SOC_MADERA
+static const struct snd_soc_dapm_widget msm8952_madera_dapm_widgets[] = {
+	SND_SOC_DAPM_SUPPLY_S("MCLK", -1,  SND_SOC_NOPM, 0, 0,
+	msm8952_mclk_event, SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+};
+#endif
+
 static struct snd_soc_dapm_route wcd9335_audio_paths[] = {
 	{"MIC BIAS1", NULL, "MCLK"},
 	{"MIC BIAS2", NULL, "MCLK"},
 	{"MIC BIAS3", NULL, "MCLK"},
 	{"MIC BIAS4", NULL, "MCLK"},
 };
+
+#ifdef CONFIG_SND_SOC_MADERA
+static struct snd_soc_dapm_route madera_audio_routes[] = {
+	{"Slim1 Playback", NULL, "MCLK"},
+	{"Slim1 Capture", NULL, "MCLK"},
+	{"Slim2 Playback", NULL, "MCLK"},
+	{"Slim2 Capture", NULL, "MCLK"},
+
+	{"AIF1 Playback", NULL, "AMP Capture"},
+	{"AMP Playback", NULL, "OPCLK"},
+
+	{"Slim1 Playback", NULL, "MCLK"},
+	{"Slim1 Capture", NULL, "MCLK"},
+	{"Slim2 Capture", NULL, "MCLK"},
+
+};
+
+static struct snd_soc_dapm_route madera_mic_routes[] = {
+	{"IN1AL", NULL, "MICBIAS1A"}, /* Mic 1 */
+	{"IN1AR", NULL, "MICBIAS1B"}, /* Mic 3 */
+	{"IN2L", NULL, "MICBIAS2B"},  /* Mic 2 */
+	{"IN1BR", NULL, "MICBIAS2A"}, /* Headset mic */
+};
+
+static struct snd_soc_dapm_route madera_albus_p1a_mic_routes[] = {
+	/* Rev 05 */
+	{"IN1AL", NULL, "MICBIAS1A"}, /* Mic 1 */
+	{"IN2R", NULL, "MICBIAS1B"},  /* Mic 3 */
+	{"IN2L", NULL, "MICBIAS2B"},  /* Mic 2 */
+	{"IN1BR", NULL, "MICBIAS2A"}, /* Headset mic */
+};
+
+static struct snd_soc_dapm_route madera_albus_mic_routes[] = {
+	/* Rev 06 */
+	{"IN1AL", NULL, "MICBIAS2A"}, /* Mic 1 */
+	{"IN2R", NULL, "MICBIAS2B"},  /* Mic 3 */
+	{"IN2L", NULL, "MICBIAS2A"},  /* Mic 2 */
+	{"IN1BR", NULL, "MICBIAS1B"}, /* Headset mic */
+};
+#endif
 
 int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 {
@@ -3399,6 +3568,251 @@ out:
 	return err;
 }
 
+#ifdef CONFIG_SND_SOC_MADERA
+int madera_dai_init(struct snd_soc_pcm_runtime *rtd)
+{
+	int ret;
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
+	struct snd_soc_card *card = codec->component.card;
+
+	ret = snd_soc_codec_set_pll(codec, MADERA_FLL1_REFCLK,
+			MADERA_FLL_SRC_NONE,
+			0, 0);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set FLL1REFCLK %d\n", ret);
+		return ret;
+	}
+
+	ret = snd_soc_codec_set_pll(codec, MADERA_FLL1_REFCLK,
+			MADERA_FLL_SRC_MCLK2,
+			32768, MADERA_SYSCLK_RATE);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set FLL1REFCLK %d\n", ret);
+		return ret;
+	}
+
+	ret = snd_soc_codec_set_sysclk(codec, MADERA_CLK_SYSCLK_1,
+		MADERA_CLK_SRC_FLL1, MADERA_SYSCLK_RATE,
+		SND_SOC_CLOCK_IN);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set SYSCLK %d\n", ret);
+		return ret;
+	}
+
+	ret = snd_soc_codec_set_sysclk(codec, MADERA_CLK_DSPCLK,
+			MADERA_CLK_SRC_FLL1, MADERA_DSPCLK_RATE,
+			SND_SOC_CLOCK_IN);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set DSPCLK %d\n", ret);
+		return ret;
+	}
+
+	ret = snd_soc_dapm_new_controls(dapm, msm8952_madera_dapm_widgets,
+		ARRAY_SIZE(msm8952_madera_dapm_widgets));
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to add dapm widgets %d\n", ret);
+		return ret;
+	}
+
+	ret = snd_soc_dapm_add_routes(dapm, madera_audio_routes,
+		ARRAY_SIZE(madera_audio_routes));
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to add audio routes %d\n", ret);
+		return ret;
+	}
+
+	if (of_property_read_bool(card->dev->of_node, "qcom,albus-audio")) {
+		if (!strncmp(card->name, "msm8952-madera-snd-cardp1a", 26)) {
+			ret = snd_soc_dapm_add_routes(dapm,
+				madera_albus_p1a_mic_routes,
+				ARRAY_SIZE(madera_albus_p1a_mic_routes));
+		} else {
+			ret = snd_soc_dapm_add_routes(dapm,
+				madera_albus_mic_routes,
+				ARRAY_SIZE(madera_albus_mic_routes));
+		}
+	} else {
+		ret = snd_soc_dapm_add_routes(dapm,
+			madera_mic_routes,
+			ARRAY_SIZE(madera_mic_routes));
+	}
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to add mic routes %d\n", ret);
+		return ret;
+	}
+
+	/* Ensures that GPIO3 is set to an output clock. */
+	snd_soc_write(codec, 0x1704, 0);
+	snd_soc_write(codec, 0x1705, 0);
+	snd_soc_write(codec, 0x1704, 0x40);
+
+	/* Set Slimbus FLL input clock to 1.536MHz */
+	snd_soc_write(codec, MADERA_SLIMBUS_FRAMER_REF_GEAR, 0x6);
+
+	snd_soc_dapm_ignore_suspend(dapm, "MICBIAS1");
+	snd_soc_dapm_ignore_suspend(dapm, "MICBIAS2");
+	snd_soc_dapm_ignore_suspend(dapm, "MICSUPP");
+	snd_soc_dapm_ignore_suspend(dapm, "MICBIAS1A");
+	snd_soc_dapm_ignore_suspend(dapm, "MICBIAS1B");
+	snd_soc_dapm_ignore_suspend(dapm, "MICBIAS2A");
+	snd_soc_dapm_ignore_suspend(dapm, "MICBIAS2B");
+	snd_soc_dapm_ignore_suspend(dapm, "IN1AL");
+	snd_soc_dapm_ignore_suspend(dapm, "IN1AR");
+	snd_soc_dapm_ignore_suspend(dapm, "IN1BL");
+	snd_soc_dapm_ignore_suspend(dapm, "IN1BR");
+	snd_soc_dapm_ignore_suspend(dapm, "IN2L");
+	snd_soc_dapm_ignore_suspend(dapm, "IN2R");
+	snd_soc_dapm_ignore_suspend(dapm, "AIF1TX1");
+	snd_soc_dapm_ignore_suspend(dapm, "AIF1TX2");
+	snd_soc_dapm_ignore_suspend(dapm, "AIF1RX1");
+	snd_soc_dapm_ignore_suspend(dapm, "AIF1RX2");
+	snd_soc_dapm_ignore_suspend(dapm, "HPOUTL");
+	snd_soc_dapm_ignore_suspend(dapm, "HPOUTR");
+	snd_soc_dapm_ignore_suspend(dapm, "SPKOUTN");
+	snd_soc_dapm_ignore_suspend(dapm, "SPKOUTP");
+	snd_soc_dapm_ignore_suspend(dapm, "DSP2 Virtual Output");
+	snd_soc_dapm_ignore_suspend(dapm, "DSP3 Virtual Output");
+	snd_soc_dapm_ignore_suspend(dapm, "DSP Virtual Input");
+
+	ret = snd_soc_add_codec_controls(codec, msm_snd_controls,
+		ARRAY_SIZE(msm_snd_controls));
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to add kcontrols %d\n", ret);
+		return ret;
+	}
+
+	if (of_property_read_bool(card->dev->of_node, "qcom,albus-audio")) {
+		ret = snd_soc_add_codec_controls(codec,
+			msm_quin_mi2s_snd_controls,
+			ARRAY_SIZE(msm_quin_mi2s_snd_controls));
+	} else {
+		ret = snd_soc_add_codec_controls(codec,
+			msm_quat_mi2s_snd_controls,
+			ARRAY_SIZE(msm_quat_mi2s_snd_controls));
+	}
+	if (ret < 0) {
+		pr_err("%s: add mi2s controls failed, err%d\n",
+			__func__, ret);
+		return ret;
+	}
+
+#ifdef CONFIG_SND_SOC_OPALUM
+	ret = ospl2xx_init(rtd);
+	if (ret != 0)
+		pr_err("%s Cannot set Opalum controls %d\n", __func__, ret);
+#endif
+	snd_soc_dapm_sync(dapm);
+
+	snd_soc_dapm_force_enable_pin(dapm, "SYSCLK");
+	snd_soc_dapm_sync(dapm);
+
+	/* Set LDO2 to 3.1V */
+	snd_soc_write(codec, MADERA_LDO2_CONTROL_1, 0x4A4);
+
+	/* Disable the MCLK */
+	snd_soc_update_bits(codec, MADERA_SYSTEM_CLOCK_1,
+		1 << MADERA_SYSCLK_ENA_SHIFT, 0);
+	snd_soc_update_bits(codec, MADERA_OUTPUT_SYSTEM_CLOCK,
+		1 << MADERA_OPCLK_ENA_SHIFT, 0);
+
+	return 0;
+}
+
+int madera_cs35l34_dai_init(struct snd_soc_pcm_runtime *rtd)
+{
+	int ret;
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
+	struct snd_soc_dai *aif1_dai = rtd->cpu_dai;
+	struct snd_soc_dai *cs35l34_dai = rtd->codec_dai;
+	struct snd_soc_codec *codec_madera = rtd->cpu_dai->codec;
+
+	ret = snd_soc_dai_set_sysclk(aif1_dai, MADERA_CLK_SYSCLK_1, 0, 0);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set SYSCLK %d\n", ret);
+		return ret;
+	}
+	ret = snd_soc_dai_set_sysclk(cs35l34_dai, 0, CS35L34_MCLK_RATE, 0);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set SYSCLK %d\n", ret);
+		return ret;
+	}
+	ret = snd_soc_codec_set_pll(codec, MADERA_FLL1_REFCLK,
+			MADERA_FLL_SRC_NONE,
+			0, 0);
+	ret = snd_soc_codec_set_pll(codec_madera, MADERA_FLL1_REFCLK,
+		MADERA_FLL_SRC_MCLK2,
+		32768, MADERA_SYSCLK_RATE);
+	ret = snd_soc_codec_set_sysclk(codec_madera, MADERA_CLK_SYSCLK_1,
+		MADERA_CLK_SRC_FLL1, MADERA_SYSCLK_RATE,
+		SND_SOC_CLOCK_IN);
+
+	ret = snd_soc_codec_set_sysclk(codec_madera, MADERA_CLK_OPCLK,
+		0, CS35L34_MCLK_RATE,
+		SND_SOC_CLOCK_OUT);
+	snd_soc_dapm_ignore_suspend(dapm, "AMP Playback");
+
+	/* Startup MCLK to initailize the cs35l34 */
+	snd_soc_update_bits(codec_madera, MADERA_SYSTEM_CLOCK_1,
+		1 << MADERA_SYSCLK_ENA_SHIFT, 1 << MADERA_SYSCLK_ENA_SHIFT);
+	snd_soc_update_bits(codec_madera, MADERA_OUTPUT_SYSTEM_CLOCK,
+		1 << MADERA_OPCLK_ENA_SHIFT, 1 << MADERA_OPCLK_ENA_SHIFT);
+
+	usleep_range(1000, 1001);
+	snd_soc_update_bits(codec, CS35L34_PWRCTL1,
+		CS35L34_PDN_ALL, CS35L34_PDN_ALL);
+	/* Wait 45ms for the interrupt pin to go low */
+	msleep(45);
+
+	return 0;
+}
+
+int madera_cs35l35_dai_init(struct snd_soc_pcm_runtime *rtd)
+{
+	int ret;
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
+	struct snd_soc_dai *aif2_dai = rtd->cpu_dai;
+	struct snd_soc_dai *cs35l35_dai = rtd->codec_dai;
+	struct snd_soc_codec *codec_madera = rtd->cpu_dai->codec;
+
+	ret = snd_soc_dai_set_sysclk(aif2_dai, MADERA_CLK_SYSCLK_1, 0, 0);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set SYSCLK %d\n", ret);
+		return ret;
+	}
+	ret = snd_soc_dai_set_sysclk(cs35l35_dai, 0, CS35L35_SCLK_RATE, 0);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set SCLK %d\n", ret);
+		return ret;
+	}
+	ret = snd_soc_codec_set_sysclk(codec, 0, 0, CS35L35_MCLK_RATE, 0);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to set MCLK %d\n", ret);
+		return ret;
+	}
+	ret = snd_soc_codec_set_pll(codec, MADERA_FLL1_REFCLK,
+			MADERA_FLL_SRC_NONE,
+			0, 0);
+	ret = snd_soc_codec_set_pll(codec_madera, MADERA_FLL1_REFCLK,
+		MADERA_FLL_SRC_MCLK2,
+		32768, MADERA_SYSCLK_RATE);
+	ret = snd_soc_codec_set_sysclk(codec_madera, MADERA_CLK_SYSCLK_1,
+		MADERA_CLK_SRC_FLL1, MADERA_SYSCLK_RATE,
+		SND_SOC_CLOCK_IN);
+
+	ret = snd_soc_codec_set_sysclk(codec_madera, MADERA_CLK_OPCLK,
+		0, CS35L35_MCLK_RATE,
+		SND_SOC_CLOCK_OUT);
+	snd_soc_dapm_ignore_suspend(dapm, "AMP Playback");
+	snd_soc_dapm_sync(dapm);
+
+	return 0;
+}
+#endif
+
+#ifndef CONFIG_SND_SOC_MADERA
 static bool msm8952_swap_gnd_mic(struct snd_soc_codec *codec, bool active)
 {
 	struct snd_soc_card *card = codec->component.card;
@@ -3460,6 +3874,7 @@ static int is_us_eu_switch_gpio_support(struct platform_device *pdev,
 	}
 	return 0;
 }
+#endif
 
 static int msm8952_populate_dai_link_component_of_node(
 					struct snd_soc_card *card)
@@ -3554,9 +3969,8 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 	const char *ext_pa = "qcom,msm-ext-pa";
 	const char *ext_pa_str = NULL;
 	int num_strings = 0;
-	int ret, i;
 	struct resource *muxsel;
-
+	int i, ret = 0;
 	pdata = devm_kzalloc(&pdev->dev,
 			sizeof(struct msm8952_asoc_mach_data), GFP_KERNEL);
 	if (!pdata)
@@ -3626,6 +4040,7 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 		}
 	}
 
+#ifndef CONFIG_SND_SOC_MADERA
 	muxsel = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 			"csr_gp_io_lpaif_qui_pcm_sec_mode_muxsel");
 	if (!muxsel) {
@@ -3673,11 +4088,13 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 			goto err;
 		}
 	}
+#endif
 
 	pdev->id = 0;
 
 	atomic_set(&pdata->clk_ref.quat_mi2s_clk_ref, 0);
 	atomic_set(&pdata->clk_ref.auxpcm_mi2s_clk_ref, 0);
+
 	card = populate_snd_card_dailinks(&pdev->dev);
 	if (!card) {
 		ret = -EPROBE_DEFER;
@@ -3691,16 +4108,17 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 			"qcom,audio-routing");
 	if (ret)
 		goto err;
-
 	ret = msm8952_populate_dai_link_component_of_node(card);
 	if (ret) {
 		ret = -EPROBE_DEFER;
 		goto err;
 	}
 
+#ifndef CONFIG_SND_SOC_MADERA
 	ret = msm8952_init_wsa_dev(pdev, card);
 	if (ret)
 		goto err;
+#endif
 
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
 	if (ret) {
@@ -3733,6 +4151,7 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 			pdata->ext_pa = (pdata->ext_pa | QUIN_MI2S_ID);
 	}
 
+#ifndef CONFIG_SND_SOC_MADERA
 	/* Parse US-Euro gpio info from DT. Report no error if us-euro
 	 * entry is not found in DT file as some targets do not support
 	 * US-Euro detection
@@ -3743,19 +4162,23 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 				__func__, ret);
 		goto err;
 	}
+#endif
 	pdata->mi2s_gpio_p[QUAT_MI2S] = of_parse_phandle(pdev->dev.of_node,
 						"qcom,quat-mi2s-gpios", 0);
 	pdata->mi2s_gpio_p[QUIN_MI2S] = of_parse_phandle(pdev->dev.of_node,
 						"qcom,quin-mi2s-gpios", 0);
+	atomic_set(&mods_mi2s_active, 0);
 
 	return 0;
 err:
+#ifndef CONFIG_SND_SOC_MADERA
 	if (pdata->us_euro_gpio > 0) {
 		dev_dbg(&pdev->dev, "%s free us_euro gpio %d\n",
 			__func__, pdata->us_euro_gpio);
 		gpio_free(pdata->us_euro_gpio);
 		pdata->us_euro_gpio = 0;
 	}
+#endif
 	if (pdata->vaddr_gpio_mux_spkr_ctl)
 		iounmap(pdata->vaddr_gpio_mux_spkr_ctl);
 	if (pdata->vaddr_gpio_mux_mic_ctl)
