@@ -4,6 +4,7 @@
 
 config CAPSENSE_CYPRESS
     tristate "Cypress CapSense HSSP Programming Driver"
+    select SENSORS
     help
       CapSense devices is the analog system contains the capacitive sensing
       hardware. Several hardware algorithms are supported. This hardware
@@ -15,4 +16,3 @@ config CAPSENSE_CYPRESS
       ARM Serial Ware Debug. This option enables firmware programming driver and
       allows automatically identify device and matching firmware. See file
       Documentation/devicetree/bindings/misc/capsense_hssp.txt for details.
-
