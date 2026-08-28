@@ -404,6 +404,17 @@
 			pinctrl-0 = <&marley_irq_default &marley_reset_default>;
 			pinctrl-1 = <&marley_irq_default &marley_reset_default
 				&marley_audio_pins>;
+			AVDD-supply = <&pm8953_l6>;
+			DBVDD1-supply = <&pm8953_l6>;
+			DBVDD2-supply = <&pm8953_l6>;
+			CPVDD-supply = <&pm8953_l6>;
+			CPVDD1-supply = <&pm8953_l6>;
+			CPVDD2-supply = <&pm8953_l6>;
+			DCVDD-supply = <&pm8953_l6>;
+			SPKVDD-supply = <&dummy_vreg>;
+
+			gpio-controller;
+			#gpio-cells = <2>;
 
 			madera_pinctrl: pinctrl {
 				compatible = "cirrus,madera-pinctrl";
@@ -454,18 +465,6 @@
 					>;
 				};
 			};
-
-			AVDD-supply = <&pm8953_l6>;
-			DBVDD1-supply = <&pm8953_l6>;
-			DBVDD2-supply = <&pm8953_l6>;
-			CPVDD-supply = <&pm8953_l6>;
-			CPVDD1-supply = <&pm8953_l6>;
-			CPVDD2-supply = <&pm8953_l6>;
-			DCVDD-supply = <&pm8953_l6>;
-			SPKVDD-supply = <&dummy_vreg>;
-
-			gpio-controller;
-			#gpio-cells = <2>;
 
 			adsps {
 				#address-cells = <1>;
